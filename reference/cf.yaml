@@ -1,0 +1,531 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: The AWS CloudFormation template for this Serverless application
+Resources:
+
+
+
+  ServerlessDeploymentBucket:
+    Type: 'AWS: :S3: :Bucket'
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+
+
+
+  ServerlessDeploymentBucketPolicy:
+    Type: 'AWS: :S3: :BucketPolicy'
+    Properties:
+      Bucket: !Ref ServerlessDeploymentBucket
+      PolicyDocument:
+        Statement:
+        - Action: 's3:*'
+          Effect: Deny
+          Principal: '*'
+          Resource:
+          - !Join
+            - ''
+            - - 'arn:'
+              - !Ref 'AWS: :Partition'
+              - ':s3: : :'
+              - !Ref ServerlessDeploymentBucket
+              - /*
+          - !Join
+            - ''
+            - - 'arn:'
+              - !Ref 'AWS::Partition'
+              - ':s3:::'
+              - !Ref ServerlessDeploymentBucket
+          Condition:
+            Bool:
+              'aws:SecureTransport': false
+
+
+
+  PlaywrightLambdaFunctionLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: /aws/lambda/playwright-aws-lambda-project-dev-PlaywrightLambdaFunction
+
+
+
+  IamRoleLambdaExecution:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - 'sts:AssumeRole'
+      Policies:
+      - PolicyName: !Join
+        - '-'
+        - - playwright-aws-lambda-project
+          - dev
+          - lambda
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'logs:CreateLogStream'
+            - 'logs:CreateLogGroup'
+            Resource:
+            - !Sub >-
+              arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/playwright-aws-lambda-project-dev*:*
+          - Effect: Allow
+            Action:
+            - 'logs:PutLogEvents'
+            Resource:
+            - !Sub >-
+              arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/playwright-aws-lambda-project-dev*:*:*
+          - Effect: Allow
+            Action:
+            - 'lambda:InvokeFunction'
+            - 'lambda:InvokeAsync'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - 's3:GetObject'
+            - 's3:GetObjectAcl'
+            - 's3:PutObject'
+            - 's3:PutObjectAcl'
+            - 's3:ListBucket'
+            - 's3:ListAllMyBuckets'
+            - 's3:CreateBucket'
+            Resource: '*'
+      Path: /
+      RoleName: !Join
+      - '-'
+      - - playwright-aws-lambda-project
+        - dev
+        - !Ref 'AWS::Region'
+        - lambdaRole
+
+
+
+  PlaywrightLambdaFunctionLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ImageUri: >-
+          580949426871.dkr.ecr.us-east-1.amazonaws.com/serverless-playwright-aws-lambda-project-dev@sha256:17d55bca8eed26dac25b7915e704e3cb869ea46605341529a49411c45d985b38
+      PackageType: Image
+      FunctionName: playwright-aws-lambda-project-dev-PlaywrightLambdaFunction
+      MemorySize: 3008
+      Timeout: 600
+      Environment:
+        Variables:
+          QA_BUCKET: !Ref SourceS3Bucket
+      Role: !GetAtt
+      - IamRoleLambdaExecution
+      - Arn
+    DependsOn:
+    - PlaywrightLambdaFunctionLogGroup
+
+
+
+  PlaywrightLambdaFunctionLambdaVersion8QHrt8Xob5go5zkWzCl3MrjQKS5WZq6vWOj4c39FU:
+    Type: 'AWS::Lambda::Version'
+    DeletionPolicy: Retain
+    Properties:
+      FunctionName: !Ref PlaywrightLambdaFunctionLambdaFunction
+      CodeSha256: 17d55bca8eed26dac25b7915e704e3cb869ea46605341529a49411c45d985b38
+
+
+
+  GenerateReportStateMachineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: !Sub 'states.${AWS::Region}.amazonaws.com'
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: dev-playwright-aws-lambda-project-statemachine
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'lambda:InvokeFunction'
+            Resource:
+            - !GetAtt
+              - PlaywrightLambdaFunctionLambdaFunction
+              - Arn
+            - !Sub
+              - '${functionArn}:*'
+              - functionArn: !GetAtt
+                - PlaywrightLambdaFunctionLambdaFunction
+                - Arn
+
+
+
+  GenerateReportStateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      DefinitionString: !Sub
+      - |-
+        {
+          "Comment": "GenerateReportStateMachine",
+          "StartAt": "GetTestListState",
+          "States": {
+            "GetTestListState": {
+              "Type": "Task",
+              "Resource": "${a4ffe39cffcea4542f070e786002518d}",
+              "Next": "ParallelRunTestState"
+            },
+            "ParallelRunTestState": {
+              "Type": "Map",
+              "InputPath": "$",
+              "ItemsPath": "$.testList",
+              "MaxConcurrency": 1000,
+              "Iterator": {
+                "StartAt": "RunTestState",
+                "States": {
+                  "RunTestState": {
+                    "Type": "Task",
+                    "TimeoutSeconds": 580,
+                    "Resource": "${a4ffe39cffcea4542f070e786002518d}",
+                    "Parameters": {
+                      "action": "runTest",
+                      "runId.$": "$.runId",
+                      "testName.$": "$.testName"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ResultPath": "$.testResultList",
+              "Next": "GenerateReportState"
+            },
+            "GenerateReportState": {
+              "Type": "Task",
+              "InputPath": "$",
+              "Resource": "${a4ffe39cffcea4542f070e786002518d}",
+              "Parameters": {
+                "action": "generateReport",
+                "runId.$": "$.runId",
+                "testResultList.$": "$.testResultList"
+              },
+              "End": true
+            }
+          }
+        }
+      - a4ffe39cffcea4542f070e786002518d: !GetAtt
+        - PlaywrightLambdaFunctionLambdaFunction
+        - Arn
+      RoleArn: !GetAtt
+      - GenerateReportStateMachineRole
+      - Arn
+      StateMachineName: GenerateReportStateMachine
+    DependsOn:
+    - GenerateReportStateMachineRole
+
+
+
+  ApiGatewayRestApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: dev-playwright-aws-lambda-project
+      EndpointConfiguration:
+        Types:
+        - EDGE
+
+
+
+  ApiGatewayResourceAws2:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt
+      - ApiGatewayRestApi
+      - RootResourceId
+      PathPart: aws2
+      RestApiId: !Ref ApiGatewayRestApi
+
+
+
+  ApiGatewayMethodAws2Post:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: POST
+      RequestParameters: {}
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      ResourceId: !Ref ApiGatewayResourceAws2
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Credentials: !GetAtt
+        - ApigatewayToStepFunctionsRole
+        - Arn
+        Uri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':states:action/StartExecution'
+        PassthroughBehavior: NEVER
+        IntegrationResponses:
+        - StatusCode: 200
+          SelectionPattern: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: '''*'''
+          ResponseTemplates: {}
+        - StatusCode: 400
+          SelectionPattern: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: '''*'''
+          ResponseTemplates: {}
+      MethodResponses:
+      - ResponseParameters:
+          method.response.header.Access-Control-Allow-Origin: '''*'''
+        ResponseModels: {}
+        StatusCode: 200
+      - ResponseParameters:
+          method.response.header.Access-Control-Allow-Origin: '''*'''
+        ResponseModels: {}
+        StatusCode: 400
+
+  ApigatewayToStepFunctionsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+          Action: 'sts:AssumeRole'
+      Policies:
+      - PolicyName: apigatewaytostepfunctions
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - 'states:StartExecution'
+            Resource: '*'
+
+  APIGWS3Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+        Version: 2012-10-17
+      RoleName: AAPIGWS3Role
+
+
+
+  APIGWS3Policy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action: 's3:Get'
+          Effect: Allow
+          Resource: !GetAtt
+          - SourceS3Bucket
+          - Arn
+        - Action:
+          - 's3:GetBucket*'
+          - 's3:GetObject*'
+          - 's3:List*'
+          Effect: Allow
+          Resource:
+          - !GetAtt
+            - SourceS3Bucket
+            - Arn
+          - !Join
+            - ''
+            - - !GetAtt
+                - SourceS3Bucket
+                - Arn
+              - /*
+        Version: 2012-10-17
+      PolicyName: APIGWS3Policy
+      Roles:
+      - !Ref APIGWS3Role
+
+
+
+  APIGWRestApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Description: This Service Will serve static pages from S3
+      Name: Serverless Website Service
+
+
+
+  APIGWCloudWatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service: apigateway.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+
+
+
+  APIGWAccount:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+      CloudWatchRoleArn: !GetAtt
+      - APIGWCloudWatchRole
+      - Arn
+    DependsOn:
+    - APIGWRestApi
+
+
+
+  APIGWDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref APIGWRestApi
+      Description: Automatically created by the RestApi construct
+    DependsOn:
+    - APIGWServiceFolderkeyMethod
+    - APIGWServiceFolderkey
+    - APIGWServiceFolderResource
+
+
+
+  APIGWStage:
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      RestApiId: !Ref APIGWRestApi
+      DeploymentId: !Ref APIGWDeployment
+      StageName: devo
+    DependsOn:
+    - APIGWAccount
+
+
+
+  APIGWServiceFolderResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt
+      - APIGWRestApi
+      - RootResourceId
+      PathPart: '{folder}'
+      RestApiId: !Ref APIGWRestApi
+
+
+
+  APIGWServiceFolderkey:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !Ref APIGWServiceFolderResource
+      PathPart: '{key+}'
+      RestApiId: !Ref APIGWRestApi
+
+
+
+  APIGWServiceFolderkeyMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: GET
+      ResourceId: !Ref APIGWServiceFolderkey
+      RestApiId: !Ref APIGWRestApi
+      AuthorizationType: NONE
+      Integration:
+        Credentials: !GetAtt
+        - APIGWS3Role
+        - Arn
+        IntegrationHttpMethod: GET
+        IntegrationResponses:
+        - ResponseParameters:
+            method.response.header.Content-Type: integration.response.header.Content-Type
+          StatusCode: '200'
+        RequestParameters:
+          integration.request.path.folder: method.request.path.folder
+          integration.request.path.key: method.request.path.key
+        Type: AWS
+        Uri: !Join
+        - ''
+        - - 'arn:'
+          - !Ref 'AWS::Partition'
+          - ':apigateway:'
+          - !Ref 'AWS::Region'
+          - ':s3:path/'
+          - !Ref SourceS3Bucket
+          - '/{folder}/{key}'
+      MethodResponses:
+      - ResponseParameters:
+          method.response.header.Content-Type: true
+        StatusCode: '200'
+      RequestParameters:
+        method.request.path.folder: true
+        method.request.path.key: true
+        method.request.header.Content-Type: true
+Outputs:
+  ServerlessDeploymentBucketName:
+    Value: !Ref ServerlessDeploymentBucket
+    Export:
+      Name: sls-playwright-aws-lambda-project-dev-ServerlessDeploymentBucketName
+  PlaywrightLambdaFunctionLambdaFunctionQualifiedArn:
+    Description: Current Lambda function version
+    Value: !Ref >-
+      PlaywrightLambdaFunctionLambdaVersion8QHrt8Xob5go5zkWzCl3MrjQKS5WZq6vWOj4c39FU
+    Export:
+      Name: >-
+        sls-playwright-aws-lambda-project-dev-PlaywrightLambdaFunctionLambdaFunctionQualifiedArn
+  GenerateReportStateMachineArn:
+    Description: Current StateMachine Arn
+    Value: !Ref GenerateReportStateMachine
+    Export:
+      Name: sls-playwright-aws-lambda-project-dev-GenerateReportStateMachineArn
+  ServiceEndpoint:
+    Description: URL of the service endpoint
+    Value: !Join
+    - ''
+    - - 'https://'
+      - !Ref ApiGatewayRestApi
+      - .execute-api.
+      - !Ref 'AWS::Region'
+      - .
+      - !Ref 'AWS::URLSuffix'
+      - /dev
+    Export:
+      Name: sls-playwright-aws-lambda-project-dev-ServiceEndpoint
+  APIGWEndpoint:
+    Value: !Join
+    - ''
+    - - 'https://'
+      - !Ref APIGWRestApi
+      - .execute-api.
+      - !Ref 'AWS::Region'
+      - .
+      - !Ref 'AWS::URLSuffix'
+      - /
+      - !Ref APIGWStage
+      - /
+    Export:
+      Name: ServerlessWebsiteUrl
+  SourceS3BucketName:
+    Value: !Ref SourceS3Bucket
+    Export:
+      Name: ServerlessWebsiteBucketName
